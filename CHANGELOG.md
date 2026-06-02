@@ -9,6 +9,10 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### New Features
+
+- A new optional `.codegraphignore` file at your project root lets you override what gets indexed, taking precedence over the built-in defaults and every `.gitignore` (your repo's, nested ones, and even files git itself ignores). Use `!path/` to force-index code that's otherwise hidden — for example a monorepo whose real code lives in a directory the root `.gitignore` excludes, or behind a nested `.gitignore`. Force-include is code-aware: a broad `!app/` brings in that subtree's source but still leaves `node_modules`, `dist`, `.yarn`, and similar dependency/build dirs out unless you name one explicitly. Plain lines (no `!`) force-exclude, and the last matching line wins, so you can re-include a tree and then trim a few files back out. (#511)
+
 
 ## [0.9.8] - 2026-06-01
 

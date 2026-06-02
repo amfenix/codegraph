@@ -18,7 +18,8 @@ import * as path from 'path';
 import type { Stats } from 'fs';
 import chokidar, { FSWatcher } from 'chokidar';
 import type { Ignore } from 'ignore';
-import { isSourceFile, buildDefaultIgnore } from '../extraction';
+import { isSourceFile, buildDefaultIgnore, loadCodegraphOverride } from '../extraction';
+import type { CodegraphOverride } from '../extraction';
 import { logDebug, logWarn } from '../errors';
 import { normalizePath } from '../utils';
 import { watchDisabledReason } from './watch-policy';
@@ -130,6 +131,10 @@ export class FileWatcher {
   // once at start(). Same source of truth the indexer uses, so watcher scope
   // can never diverge from index scope.
   private ignoreMatcher: Ignore | null = null;
+  // Optional `.codegraphignore` override (final authority over .gitignore +
+  // defaults). Built once at start(), beside ignoreMatcher, from the same loader
+  // the indexer uses — so watch scope tracks index scope through the override too.
+  private override: CodegraphOverride | null = null;
 
   private readonly projectRoot: string;
   private readonly debounceMs: number;
@@ -171,6 +176,7 @@ export class FileWatcher {
     // chokidar only registers an inotify watch on directories that pass this
     // filter — that's the #276 fix.
     this.ignoreMatcher = buildDefaultIgnore(this.projectRoot);
+    this.override = loadCodegraphOverride(this.projectRoot);
 
     try {
       this.watcher = chokidar.watch(this.projectRoot, {
@@ -257,6 +263,29 @@ export class FileWatcher {
     const rel = normalizePath(path.relative(this.projectRoot, testPath));
     if (!rel || rel === '.' || rel.startsWith('..')) return false; // root / outside
     if (this.isAlwaysIgnored(rel)) return true;
+    // `.codegraphignore` overrides defaults + .gitignore: a force-include keeps
+    // the path watched (descending into otherwise-excluded dirs to reach buried
+    // includes); a force-exclude prunes it. null verdict falls through to the
+    // default matcher below.
+    if (this.override) {
+      if (stats?.isDirectory()) {
+        const sd = this.override.shouldDescend(rel);
+        if (sd === 'include') return false;
+        if (sd === 'exclude') return true;
+      } else if (stats) {
+        const v = this.override.verdict(rel);
+        if (v === 'include') return false;
+        if (v === 'exclude') return true;
+      } else {
+        // Stats unknown: include wins if either the dir-descent or file verdict
+        // says so; otherwise an explicit exclude prunes.
+        const sd = this.override.shouldDescend(rel);
+        if (sd === 'include') return false;
+        const v = this.override.verdict(rel);
+        if (v === 'include') return false;
+        if (sd === 'exclude' || v === 'exclude') return true;
+      }
+    }
     if (!this.ignoreMatcher) return false;
     if (stats) {
       return this.ignoreMatcher.ignores(stats.isDirectory() ? rel + '/' : rel);
@@ -284,6 +313,7 @@ export class FileWatcher {
     this.pendingFiles.clear();
     this.chokidarReady = false;
     this.ignoreMatcher = null;
+    this.override = null;
     logDebug('File watcher stopped');
   }
 
